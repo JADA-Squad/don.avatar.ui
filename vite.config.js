@@ -1,18 +1,29 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  // The Azure Speech SDK ships as a CJS bundle — Vite must pre-bundle it into ESM
   define: {
     global: 'globalThis',
   },
   optimizeDeps: {
     include: ['microsoft-cognitiveservices-speech-sdk'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Three.js core — large and changes rarely, benefits from long-term caching
+          'three': ['three'],
+          // R3F + Drei — separate from app code for the same reason
+          'r3f': ['@react-three/fiber', '@react-three/drei'],
+          // Azure Speech SDK — only loaded on first TTS call via dynamic import
+          // Rollup will auto-split it; no manual entry needed here
+        },
+      },
+    },
+  },
   server: {
-    // In dev, proxy /api calls to vercel dev (port 3000) or fallback to Express server (port 3001)
     proxy: {
       '/api': process.env.VERCEL_DEV ? 'http://localhost:3000' : 'http://localhost:3001',
     },

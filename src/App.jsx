@@ -2,9 +2,12 @@ import React, { Suspense, useEffect, useState, useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, useGLTF, Environment } from '@react-three/drei';
 import * as THREE from 'three';
-import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 import ReactMarkdown from 'react-markdown';
 import './App.css';
+
+// Kick off the 23 MB GLB download immediately when this module is parsed,
+// long before the Canvas or TalkingAvatar component mounts.
+useGLTF.preload('/avatars/josh.glb');
 
 const MicIcon = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -71,6 +74,9 @@ async function synthesizeSpeech(text) {
   if (!tokenRes.ok) throw new Error('Could not obtain speech token from server.');
   const { token, region } = await tokenRes.json();
 
+  // Lazy-load the SDK — only fetched on first TTS call, not on page load
+  const SpeechSDK = await import('microsoft-cognitiveservices-speech-sdk');
+
   return new Promise((resolve, reject) => {
     const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
     speechConfig.speechSynthesisVoiceName = 'en-US-AndrewNeural';
@@ -95,7 +101,7 @@ async function synthesizeSpeech(text) {
   });
 }
 
-function TalkingAvatar({ ttsPayload, onEnded }) {
+function TalkingAvatar({ ttsPayload, onEnded, onLoad }) {
   const { scene } = useGLTF('/avatars/josh.glb');
   const faceMeshes    = useRef([]);
   const audioCtxRef   = useRef(null);
@@ -113,6 +119,8 @@ function TalkingAvatar({ ttsPayload, onEnded }) {
         if (child.name === 'RightArm') child.rotation.x = 1.2;
       }
     });
+    // Signal to parent that the model has finished parsing and is ready
+    onLoad?.();
   }, [scene]);
 
   useEffect(() => {
@@ -194,6 +202,7 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [ttsPayload, setTtsPayload] = useState(null); // { audioData, visemes }
   const [micError, setMicError] = useState('');
+  const [isSceneLoaded, setIsSceneLoaded] = useState(false);
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
   const messagesEndRef = useRef(null);
@@ -361,6 +370,12 @@ export default function App() {
 
           <div className="av-scene">
             {isAvatarSpeaking && <div className="av-glow" />}
+            {!isSceneLoaded && (
+              <div className="av-loading">
+                <div className="av-loading__spinner" />
+                <span>Loading avatar…</span>
+              </div>
+            )}
             <Canvas camera={{ position: [0, 0.1, 2.8], fov: 20 }}>
               <ambientLight intensity={0.7} />
               <directionalLight position={[0, 2, 3]} intensity={0.8} />
@@ -369,6 +384,7 @@ export default function App() {
                 <TalkingAvatar
                   ttsPayload={ttsPayload}
                   onEnded={() => setIsAvatarSpeaking(false)}
+                  onLoad={() => setIsSceneLoaded(true)}
                 />
               </Suspense>
               <OrbitControls enableZoom={false} enablePan={false} enableRotate={false} target={[0, 0.05, 0]} />
