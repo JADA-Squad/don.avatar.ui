@@ -12,13 +12,9 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks: {
-          // Three.js core — large and changes rarely, benefits from long-term caching
-          'three': ['three'],
-          // R3F + Drei — separate from app code for the same reason
-          'r3f': ['@react-three/fiber', '@react-three/drei'],
-          // Azure Speech SDK — only loaded on first TTS call via dynamic import
-          // Rollup will auto-split it; no manual entry needed here
+        manualChunks(id) {
+          if (id.includes('node_modules/three/')) return 'three';
+          if (id.includes('@react-three/fiber') || id.includes('@react-three/drei')) return 'r3f';
         },
       },
     },
