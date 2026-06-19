@@ -173,38 +173,6 @@
   animation: speakGlow 2.2s ease-in-out infinite;
 }
 
-.av-loading {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  background: #111111;
-  border-radius: 18px;
-}
-
-.av-loading span {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.35);
-  letter-spacing: 0.5px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.av-loading__spinner {
-  width: 32px;
-  height: 32px;
-  border: 2.5px solid rgba(255, 255, 255, 0.08);
-  border-top-color: #e85e09;
-  border-radius: 50%;
-  animation: spin 0.85s linear infinite;
-}
-
 /* Waveform bars */
 .mic-error {
   font-size: 11px;
@@ -659,4 +627,148 @@
   .msg-bubble {
     max-width: 85%;
   }
+}
+
+/* View toggle (Avatar / Voice) */
+.view-toggle {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 99px;
+  background: rgba(10, 10, 10, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.view-toggle__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 6px 16px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+.view-toggle__btn:hover { color: #fff; }
+.view-toggle__btn--active { background: #e85e09; color: #fff; }
+
+/* Voice orb (ChatGPT-style) */
+.orb-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 50% 50%, #0c0f14 0%, #050608 100%);
+}
+
+/* Outer element carries the audio-reactive swell (--amp from rAF, 0..1) */
+.orb {
+  position: relative;
+  width: clamp(150px, 56%, 230px);
+  aspect-ratio: 1;
+  transform: scale(calc(1 + var(--amp, 0) * 0.18));
+  will-change: transform;
+}
+
+.orb__glow {
+  position: absolute;
+  inset: -30%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%,
+    rgba(160, 215, 255, 0.55) 0%,
+    rgba(90, 150, 240, 0.22) 45%,
+    transparent 70%);
+  filter: blur(20px);
+  opacity: calc(0.32 + var(--amp, 0) * 0.68);
+  z-index: 0;
+}
+
+/* Inner element clips the gradient + clouds and carries the idle breathing */
+.orb__core {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: linear-gradient(180deg, #eef7ff 0%, #cfeaff 30%, #93c8f5 62%, #3f86d6 100%);
+  box-shadow: inset 0 -14px 34px rgba(34, 84, 154, 0.55), inset 0 16px 32px rgba(255, 255, 255, 0.7);
+  animation: orbBreathe 5.5s ease-in-out infinite;
+  z-index: 1;
+}
+
+.orb__cloud {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(11px);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.orb__cloud--a {
+  width: 92%; height: 72%; left: 4%; top: 16%;
+  background: radial-gradient(circle at 42% 42%, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0) 60%);
+  animation: cloudA 9s ease-in-out infinite;
+}
+
+.orb__cloud--b {
+  width: 82%; height: 66%; left: 12%; top: 40%;
+  background: radial-gradient(circle at 58% 50%, rgba(186, 228, 255, 0.85), rgba(186, 228, 255, 0) 62%);
+  animation: cloudB 11s ease-in-out infinite;
+}
+
+.orb__cloud--c {
+  width: 70%; height: 56%; left: 18%; top: 6%;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 60%);
+  animation: cloudC 13s ease-in-out infinite;
+}
+
+.orb__sheen {
+  position: absolute;
+  left: 13%; top: 7%;
+  width: 74%; height: 40%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0) 65%);
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+/* While listening, tint the halo toward the brand orange for a clear cue */
+.orb--listening .orb__glow {
+  background: radial-gradient(circle at 50% 45%,
+    rgba(255, 170, 90, 0.5) 0%,
+    rgba(232, 94, 9, 0.22) 45%,
+    transparent 70%);
+}
+
+@keyframes orbBreathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.035); }
+}
+
+@keyframes cloudA {
+  0%, 100% { transform: translate(0, 0) scale(1);     opacity: 0.9; }
+  50%      { transform: translate(-6%, 6%) scale(1.1); opacity: 1; }
+}
+
+@keyframes cloudB {
+  0%, 100% { transform: translate(0, 0) scale(1);      }
+  50%      { transform: translate(8%, -5%) scale(1.12); }
+}
+
+@keyframes cloudC {
+  0%, 100% { transform: translate(0, 0) scale(1);      opacity: 0.7; }
+  50%      { transform: translate(4%, 8%) scale(0.92);  opacity: 0.95; }
 }
