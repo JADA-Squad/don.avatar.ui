@@ -635,7 +635,7 @@
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 3;
+  z-index: 5;
   display: flex;
   gap: 2px;
   padding: 3px;
@@ -772,3 +772,120 @@
   0%, 100% { transform: translate(0, 0) scale(1);      opacity: 0.7; }
   50%      { transform: translate(4%, 8%) scale(0.92);  opacity: 0.95; }
 }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ─────────────────────────────────────────────────────────────
+   SPATIUS AVATAR (real-time 3D)
+───────────────────────────────────────────────────────────── */
+
+.avatar-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* AvatarKit applies inline styles to the container (position: relative,
+   display: flex, and a very tall intrinsic height that overflows the scene).
+   Force it back to a fixed, clipped frame with !important so its size never
+   depends on the avatar's native render height. */
+.avatar-container {
+  position: absolute !important;
+  inset: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  display: block !important;
+  overflow: hidden !important;
+}
+
+.avatar-container canvas {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  display: block !important;
+  object-fit: cover !important;
+  object-position: center 16% !important;
+  /* The avatar bitmap matches the frame aspect, so it fills edge-to-edge with the
+     head right at the top - under the view toggle. Nudge it down to open a dark
+     headroom band for the toggle, clipping a little torso at the bottom instead. */
+  transform: translateY(11%) !important;
+}
+
+/* Avatar start / loading / error overlay */
+.sp-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(ellipse at 50% 45%, rgba(20, 26, 34, 0.82) 0%, rgba(7, 8, 11, 0.95) 100%);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.sp-overlay__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  max-width: 280px;
+}
+
+.sp-overlay__title { font-size: 17px; font-weight: 700; color: #fff; letter-spacing: -0.2px; }
+.sp-overlay__text  { font-size: 12.5px; line-height: 1.55; color: rgba(255, 255, 255, 0.6); }
+
+.sp-overlay__btn {
+  margin-top: 4px;
+  padding: 11px 22px;
+  border: none;
+  border-radius: 12px;
+  background: #e85e09;
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+}
+.sp-overlay__btn:hover {
+  background: #d35208;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(232, 94, 9, 0.4);
+}
+
+.sp-overlay--error .sp-overlay__title { color: #ff8a6b; }
+
+.sp-progress {
+  width: 200px;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.sp-progress__bar {
+  height: 100%;
+  background: #e85e09;
+  border-radius: 99px;
+  transition: width 0.25s ease;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   VOICE WAVEFORM (replaces the old orb)
+───────────────────────────────────────────────────────────── */
+
+.voice-wave {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 50% 50%, #0c0f14 0%, #050608 100%);
+}
+.voice-wave__canvas { width: 88%; height: 46%; }

@@ -1,9 +1,8 @@
-import React, { Suspense, useEffect, useState, useRef } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
-import { OrbitControls, useGLTF, Environment } from '@react-three/drei';
-import * as THREE from 'three';
+import React, { useEffect, useState, useRef } from 'react';
 import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
 import ReactMarkdown from 'react-markdown';
+import SpatiusAvatar from './SpatiusAvatar.jsx';
+import VoiceWave from './VoiceWave.jsx';
 import './App.css';
 
 const MicIcon = () => (
@@ -35,47 +34,9 @@ const SendIcon = () => (
   </svg>
 );
 
-// Azure viseme IDs (0-21) mapped to the Oculus / Ready Player Me viseme blend
-// shapes that josh.glb exposes (CH DD E FF PP RR SS TH aa ih kk nn oh ou sil).
-// Every Azure viseme gets a phonetically correct shape; the old mapping wrongly
-// collapsed s/z to silence and folded sh/ch/th/r into the wrong shapes.
-const AZURE_VISEME_TO_OCULUS = {
-  0:  'sil', //          silence
-  1:  'aa',  // ae uh    bat, the, but
-  2:  'aa',  // ah       father
-  3:  'oh',  // aw       thought
-  4:  'E',   // eh oo    bed, book
-  5:  'RR',  // er       bird (r-coloured)
-  6:  'ih',  // y i ih   yes, ease, it
-  7:  'ou',  // w u      we, you
-  8:  'oh',  // oh       go
-  9:  'aa',  // ow       how
-  10: 'oh',  // oy       boy
-  11: 'aa',  // eye      my
-  12: 'aa',  // h        he
-  13: 'RR',  // r        red
-  14: 'nn',  // l        let
-  15: 'SS',  // s z      see, zoo   (was wrongly 'sil')
-  16: 'CH',  // sh ch j  she, church, judge
-  17: 'TH',  // th       then
-  18: 'FF',  // f v      for, very
-  19: 'DD',  // d t n    dig, top, no
-  20: 'kk',  // k g ng   cat, go, sing
-  21: 'PP',  // p b m    put, big, my
-};
-
-// Every viseme morph we drive, so the inactive ones relax toward 0 each frame.
-// 'sil' is omitted on purpose: silence means rest pose, which for a normal face
-// mesh is already a closed mouth, so we just let everything fall to 0.
-const ALL_VISEMES = ['CH', 'DD', 'E', 'FF', 'PP', 'RR', 'SS', 'TH', 'aa', 'ih', 'kk', 'nn', 'oh', 'ou'];
-
-// Lip-sync tuning (seconds)
-const VISEME_LEAD = 0.04;   // let mouth shapes lead the audio a hair
-const VISEME_BLEND = 0.07;  // crossfade window between consecutive visemes
-const SMOOTH_TAU = 0.025;   // exponential-smoothing time constant (frame-rate independent)
-
-// Call Azure TTS and collect viseme events alongside the audio ArrayBuffer.
-// audioOffset is in 100-nanosecond ticks, so divide by 10,000,000 for seconds.
+// Call Azure TTS and return the spoken audio as raw 16-bit PCM @ 24kHz mono.
+// The Spatius avatar lip-syncs to this PCM (it does the visemes server-side), and
+// the Voice view plays the same PCM through Web Audio so the waveform reacts.
 async function synthesizeSpeech(text) {
   // Fetch a short-lived token from our server - the actual key stays server-side
   const tokenRes = await fetch('/api/speech-token');
@@ -84,19 +45,18 @@ async function synthesizeSpeech(text) {
 
   return new Promise((resolve, reject) => {
     const speechConfig = SpeechSDK.SpeechConfig.fromAuthorizationToken(token, region);
-    speechConfig.speechSynthesisVoiceName = 'en-US-AndrewNeural';
+    speechConfig.speechSynthesisVoiceName = 'en-US-JennyNeural';
+    // Headerless raw PCM16 @ 24kHz: matches the avatar's expected audio format
+    // and is trivial to feed straight into a Web Audio buffer.
+    speechConfig.speechSynthesisOutputFormat = SpeechSDK.SpeechSynthesisOutputFormat.Raw24Khz16BitMonoPcm;
     // null audioConfig means the SDK returns full audio as ArrayBuffer in result.audioData
     const synthesizer = new SpeechSDK.SpeechSynthesizer(speechConfig, null);
-    const visemes = [];
-    synthesizer.visemeReceived = (_s, e) => {
-      visemes.push({ timeSeconds: e.audioOffset / 10_000_000, visemeId: e.visemeId });
-    };
     synthesizer.speakTextAsync(
       text,
       (result) => {
         synthesizer.close();
         if (result.reason === SpeechSDK.ResultReason.SynthesizingAudioCompleted) {
-          resolve({ audioData: result.audioData, visemes });
+          resolve({ audioData: result.audioData, sampleRate: 24000 });
         } else {
           reject(new Error(result.errorDetails || 'TTS synthesis failed'));
         }
@@ -106,68 +66,8 @@ async function synthesizeSpeech(text) {
   });
 }
 
-// Audio is owned at the App level (not inside the 3D avatar) so it plays in both
-// the avatar and the voice-orb views. This hook owns the AudioContext, plays each
-// TTS clip, and taps the signal with an AnalyserNode the orb reads for its pulse.
-// The avatar's viseme loop reads startTimeRef/playingRef for timing.
-function useSpeechAudio(ttsPayload, onEnded) {
-  const audioCtxRef  = useRef(null);
-  const analyserRef  = useRef(null);
-  const sourceRef    = useRef(null);
-  const startTimeRef = useRef(0);
-  const playingRef   = useRef(false);
-  const onEndedRef   = useRef(onEnded);
-  onEndedRef.current = onEnded;
-
-  useEffect(() => {
-    // Stop whatever is currently playing
-    if (sourceRef.current) { try { sourceRef.current.stop(); } catch {} sourceRef.current = null; }
-    playingRef.current = false;
-    if (!ttsPayload) return;
-
-    let cancelled = false;
-    const ctx = audioCtxRef.current || (audioCtxRef.current = new AudioContext());
-    ctx.resume?.();
-    // One analyser for the whole session, sitting between source and speakers
-    if (!analyserRef.current) {
-      const an = ctx.createAnalyser();
-      an.fftSize = 1024;
-      an.smoothingTimeConstant = 0.82;
-      an.connect(ctx.destination);
-      analyserRef.current = an;
-    }
-    // slice(0) copies the ArrayBuffer before decodeAudioData detaches it
-    ctx.decodeAudioData(ttsPayload.audioData.slice(0))
-      .then((buffer) => {
-        if (cancelled) return;
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(analyserRef.current);
-        startTimeRef.current = ctx.currentTime;
-        src.start(0);
-        sourceRef.current = src;
-        playingRef.current = true;
-        src.onended = () => {
-          if (cancelled) return;
-          sourceRef.current = null;
-          playingRef.current = false;
-          onEndedRef.current?.();
-        };
-      })
-      .catch(console.error);
-
-    return () => {
-      cancelled = true;
-      if (sourceRef.current) { try { sourceRef.current.stop(); } catch {} sourceRef.current = null; }
-      playingRef.current = false;
-    };
-  }, [ttsPayload]);
-
-  return { audioCtxRef, analyserRef, startTimeRef, playingRef };
-}
-
-// Taps the microphone into an analyser while active, so the orb reacts to the
-// user's voice the way ChatGPT's does. Reuses the shared AudioContext and never
+// Taps the microphone into an analyser while active, so the waveform reacts to
+// the user's voice while listening. Reuses the shared AudioContext and never
 // connects to the speakers (no echo). Failures degrade silently to idle motion.
 function useMicAudio(active, audioCtxRef) {
   const analyserRef = useRef(null);
@@ -178,7 +78,7 @@ function useMicAudio(active, audioCtxRef) {
       .then((s) => {
         if (cancelled) { s.getTracks().forEach((t) => t.stop()); return; }
         stream = s;
-        const ctx = audioCtxRef.current || (audioCtxRef.current = new AudioContext());
+        const ctx = audioCtxRef.current || (audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)());
         ctx.resume?.();
         const an = ctx.createAnalyser();
         an.fftSize = 1024;
@@ -198,172 +98,99 @@ function useMicAudio(active, audioCtxRef) {
   return analyserRef;
 }
 
-// ChatGPT-style voice orb: a soft, cloudy blue-white sphere that breathes when
-// idle and swells/glows with the live audio level (assistant speech, or the
-// user's mic while listening). All motion is CSS; this only feeds a smoothed
-// amplitude into the --amp custom property each animation frame.
-const ORB_FFT = 1024;
-function VoiceOrb({ ttsAnalyserRef, micAnalyserRef, isSpeaking, isListening }) {
-  const orbRef = useRef(null);
-  const ampRef = useRef(0);
-
-  useEffect(() => {
-    let raf;
-    const buf = new Uint8Array(ORB_FFT);
-    const tick = () => {
-      const analyser = isSpeaking ? ttsAnalyserRef.current
-                     : isListening ? micAnalyserRef.current
-                     : null;
-      let target = 0;
-      if (analyser) {
-        analyser.getByteTimeDomainData(buf);
-        let sum = 0;
-        for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
-        target = Math.min(1, Math.sqrt(sum / buf.length) * 3.2);
-      }
-      // Fast attack, slow release - lively without flicker
-      const cur = ampRef.current;
-      ampRef.current = cur + (target - cur) * (target > cur ? 0.35 : 0.08);
-      orbRef.current?.style.setProperty('--amp', ampRef.current.toFixed(3));
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [isSpeaking, isListening, ttsAnalyserRef, micAnalyserRef]);
-
-  return (
-    <div className="orb-stage">
-      <div
-        ref={orbRef}
-        className={`orb ${isSpeaking ? 'orb--speaking' : ''} ${isListening ? 'orb--listening' : ''}`}
-        style={{ '--amp': 0 }}
-      >
-        <div className="orb__glow" />
-        <div className="orb__core">
-          <div className="orb__cloud orb__cloud--a" />
-          <div className="orb__cloud orb__cloud--b" />
-          <div className="orb__cloud orb__cloud--c" />
-          <div className="orb__sheen" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TalkingAvatar({ visemes, audioCtxRef, startTimeRef, playingRef }) {
-  const { scene } = useGLTF('/avatars/josh.glb');
-  const faceMeshes = useRef([]);
-  const visemesRef = useRef([]);
-  const blinkRef   = useRef({ next: 2 + Math.random() * 3, t: -1 });
-
-  useEffect(() => {
-    faceMeshes.current = [];
-    scene.traverse((child) => {
-      if (child.isMesh && child.morphTargetDictionary) faceMeshes.current.push(child);
-      if (child.isBone) {
-        if (child.name.includes('LeftShoulder')) child.rotation.z = 0.2;
-        if (child.name.includes('RightShoulder')) child.rotation.z = -0.2;
-        if (child.name === 'LeftArm')  child.rotation.x = 1.2;
-        if (child.name === 'RightArm') child.rotation.x = 1.2;
-      }
-    });
-  }, [scene]);
-
-  // Mirror the active viseme track into a ref for the render loop. Audio playback
-  // lives in the parent (useSpeechAudio) so speech keeps playing regardless of
-  // which view (avatar or orb) is mounted.
-  useEffect(() => { visemesRef.current = visemes ?? []; }, [visemes]);
-
-  useFrame((_state, delta) => {
-    const meshes = faceMeshes.current;
-    if (meshes.length === 0) return;
-    const dt = Math.min(delta, 0.1); // clamp big gaps (e.g. backgrounded tab)
-
-    // 1. Resolve viseme targets via a time-based crossfade between keyframes
-    const targets = {}; // viseme name -> target weight (0..1)
-    const ctx = audioCtxRef.current;
-    const visemes = visemesRef.current;
-    if (ctx && playingRef.current && visemes.length > 0) {
-      const elapsed = ctx.currentTime - startTimeRef.current + VISEME_LEAD;
-      let i = -1;
-      for (let k = 0; k < visemes.length; k++) {
-        if (visemes[k].timeSeconds <= elapsed) i = k; else break;
-      }
-      if (i >= 0) {
-        const cur = AZURE_VISEME_TO_OCULUS[visemes[i].visemeId] ?? 'sil';
-        const nextV = visemes[i + 1];
-        const next = nextV ? (AZURE_VISEME_TO_OCULUS[nextV.visemeId] ?? 'sil') : 'sil';
-        const segStart = visemes[i].timeSeconds;
-        const segEnd = nextV ? nextV.timeSeconds : segStart + 0.18;
-        const blend = Math.min(VISEME_BLEND, (segEnd - segStart) * 0.5);
-        let wNext = 0;
-        if (blend > 0 && elapsed > segEnd - blend) {
-          wNext = (elapsed - (segEnd - blend)) / blend; // 0 -> 1 into the next shape
-        }
-        const wCur = 1 - wNext;
-        if (cur !== 'sil') targets[cur] = (targets[cur] || 0) + wCur;
-        if (next !== 'sil') targets[next] = (targets[next] || 0) + wNext;
-      }
-    }
-
-    // 2. Idle eye blink (randomized, smooth sine envelope)
-    const blink = blinkRef.current;
-    let blinkW = 0;
-    if (blink.t >= 0) {
-      blink.t += dt;
-      const DUR = 0.14;
-      if (blink.t >= DUR) { blink.t = -1; blink.next = 2.5 + Math.random() * 3.5; }
-      else blinkW = Math.sin((blink.t / DUR) * Math.PI); // 0 -> 1 -> 0
-    } else {
-      blink.next -= dt;
-      if (blink.next <= 0) blink.t = 0;
-    }
-
-    // 3. Apply to every face mesh with frame-rate-independent smoothing
-    const k = 1 - Math.exp(-dt / SMOOTH_TAU);
-    meshes.forEach((mesh) => {
-      const dict = mesh.morphTargetDictionary;
-      const infl = mesh.morphTargetInfluences;
-      ALL_VISEMES.forEach((name) => {
-        const idx = dict[name];
-        if (idx !== undefined) {
-          infl[idx] = THREE.MathUtils.lerp(infl[idx], targets[name] || 0, k);
-        }
-      });
-      // Blink is already a smooth envelope, so set it directly.
-      const bl = dict.eyeBlinkLeft, br = dict.eyeBlinkRight;
-      if (bl !== undefined) infl[bl] = blinkW;
-      if (br !== undefined) infl[br] = blinkW;
-    });
-  });
-
-  return <primitive object={scene} scale={2} position={[0, -3.2, 0]} />;
-}
-
 export default function App() {
-  const defaultMessage = { sender: 'bot', text: 'Hey! I\'m Don, your AI analytics assistant. Talk or type - I\'m ready when you are.' };
+  const defaultMessage = { sender: 'bot', text: 'Hello. How can I assist you with your telecoms Instagram campaign analysis today?' };
   const [messages, setMessages] = useState([defaultMessage]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isAvatarSpeaking, setIsAvatarSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [ttsPayload, setTtsPayload] = useState(null); // { audioData, visemes }
   const [micError, setMicError] = useState('');
   const [viewMode, setViewMode] = useState('voice'); // 'avatar' | 'voice'
+
+  const avatarRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const ttsAnalyserRef = useRef(null);
+  const ttsSourceRef = useRef(null);
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
   const messagesEndRef = useRef(null);
+  const sendMsgRef = useRef(null);
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
 
-  // Audio is owned here (not inside the 3D avatar) so speech plays in either view
-  // and both the avatar (visemes) and the orb (amplitude) can read it.
-  const { audioCtxRef, analyserRef, startTimeRef, playingRef } =
-    useSpeechAudio(ttsPayload, () => setIsAvatarSpeaking(false));
+  // Mic analyser drives the waveform while listening.
   const micAnalyserRef = useMicAudio(isListening, audioCtxRef);
 
   // Auto-scroll chat to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // === AUDIO PLAYBACK (Voice view) ===
+  function stopPcm() {
+    if (ttsSourceRef.current) {
+      try { ttsSourceRef.current.stop(); } catch {}
+      ttsSourceRef.current = null;
+    }
+    setIsAvatarSpeaking(false);
+  }
+
+  // Play raw PCM16 through Web Audio with an analyser the waveform reads.
+  function playPcm(arrayBuffer, sampleRate) {
+    const ctx = audioCtxRef.current || (audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)());
+    ctx.resume?.();
+    if (!ttsAnalyserRef.current) {
+      const an = ctx.createAnalyser();
+      an.fftSize = 1024;
+      an.smoothingTimeConstant = 0.82;
+      an.connect(ctx.destination);
+      ttsAnalyserRef.current = an;
+    }
+    if (ttsSourceRef.current) {
+      try { ttsSourceRef.current.stop(); } catch {}
+      ttsSourceRef.current = null;
+    }
+    const pcm = new Int16Array(arrayBuffer);
+    if (pcm.length === 0) return;
+    const buffer = ctx.createBuffer(1, pcm.length, sampleRate);
+    const channel = buffer.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ttsAnalyserRef.current);
+    src.onended = () => {
+      if (ttsSourceRef.current === src) { ttsSourceRef.current = null; setIsAvatarSpeaking(false); }
+    };
+    ttsSourceRef.current = src;
+    setIsAvatarSpeaking(true);
+    src.start();
+  }
+
+  // Speak Don's reply: route to the live avatar (Avatar view, lip-synced) or
+  // through Web Audio so the waveform reacts (Voice view / avatar not ready).
+  async function speak(text) {
+    const clean = (text || '').trim();
+    if (!clean) return;
+    let payload;
+    try {
+      payload = await synthesizeSpeech(clean);
+    } catch (err) {
+      console.error('TTS error:', err);
+      return;
+    }
+    if (viewModeRef.current === 'avatar' && avatarRef.current?.isReady()) {
+      setIsAvatarSpeaking(true);
+      avatarRef.current.streamPcm(payload.audioData); // avatar plays + lip-syncs
+    } else {
+      playPcm(payload.audioData, payload.sampleRate);
+    }
+  }
+
+  function interruptAll() {
+    try { avatarRef.current?.interrupt(); } catch {}
+    stopPcm();
+  }
 
   // === SPEECH TO TEXT LOGIC ===
   const stopListening = () => {
@@ -390,6 +217,7 @@ export default function App() {
     setMicError('');
     transcriptRef.current = '';
     setInput('');
+    interruptAll();
 
     // Request mic permission explicitly first for a clear permission prompt
     navigator.mediaDevices?.getUserMedia({ audio: true })
@@ -442,30 +270,36 @@ export default function App() {
       });
   };
 
-  // Keep a stable ref to sendMessageWithText so recognition.onend never has a stale closure
-  const sendMsgRef = useRef(null);
-
   // === BUTTON ACTIONS ===
   const stopAvatar = () => {
-    stopListening();          // stop mic if active
-    setIsAvatarSpeaking(false);
-    setTtsPayload(null);      // stops playback inside useSpeechAudio
+    stopListening();    // stop mic if active
+    interruptAll();     // stop avatar speech / Web Audio playback
   };
 
   const clearChat = () => {
     stopListening();
+    interruptAll();
     setMessages([defaultMessage]);
     setInput('');
     setMicError('');
-    setIsAvatarSpeaking(false);
-    setTtsPayload(null);
   };
+
+  // Avatar reports its own speaking state in Avatar view (it owns playback there).
+  function handleAvatarStatus(status, detail) {
+    if (status === 'speaking') setIsAvatarSpeaking(true);
+    else if (status === 'idle') setIsAvatarSpeaking(false);
+    else if (status === 'error') {
+      setIsAvatarSpeaking(false);
+      if (detail) setMessages((prev) => [...prev, { sender: 'bot', text: detail }]);
+    }
+  }
 
   // Shared send logic, called by both the button/Enter key and auto-send after speech
   const sendMessageWithText = async (text) => {
     const userMsg = text.trim();
     if (!userMsg) return;
 
+    interruptAll();
     setMessages((prev) => [...prev, { sender: 'user', text: userMsg }]);
     setInput('');
     setIsLoading(true);
@@ -483,15 +317,8 @@ export default function App() {
 
       setMessages((prev) => [...prev, { sender: 'bot', text: chatText }]);
 
-      // Synthesize speech. Errors here are non-fatal; chat still works
-      try {
-        const payload = await synthesizeSpeech(speakText);
-        setTtsPayload(payload);
-        setIsAvatarSpeaking(true);
-      } catch (ttsErr) {
-        console.error('TTS error:', ttsErr);
-      }
-
+      // Speak the reply. Errors here are non-fatal; chat still works.
+      await speak(speakText);
     } catch (error) {
       console.error('n8n Error:', error);
       setMessages((prev) => [...prev, { sender: 'bot', text: 'Connection to the avatar service failed.' }]);
@@ -504,6 +331,8 @@ export default function App() {
 
   // Keep sendMsgRef in sync on every render so onend always calls the latest version
   sendMsgRef.current = sendMessageWithText;
+
+  const waveMode = isListening ? 'listening' : isAvatarSpeaking ? 'speaking' : 'idle';
 
   return (
     <div className="app-shell">
@@ -522,8 +351,6 @@ export default function App() {
           </header>
 
           <div className="av-scene">
-            {viewMode === 'avatar' && isAvatarSpeaking && <div className="av-glow" />}
-
             <div className="view-toggle" role="tablist" aria-label="Avatar or voice view">
               <button
                 role="tab"
@@ -544,26 +371,12 @@ export default function App() {
             </div>
 
             {viewMode === 'avatar' ? (
-              <Canvas camera={{ position: [0, 0.1, 2.8], fov: 20 }}>
-                <ambientLight intensity={0.7} />
-                <directionalLight position={[0, 2, 3]} intensity={0.8} />
-                <Environment preset="city" />
-                <Suspense fallback={null}>
-                  <TalkingAvatar
-                    visemes={ttsPayload?.visemes}
-                    audioCtxRef={audioCtxRef}
-                    startTimeRef={startTimeRef}
-                    playingRef={playingRef}
-                  />
-                </Suspense>
-                <OrbitControls enableZoom={false} enablePan={false} enableRotate={false} target={[0, 0.05, 0]} />
-              </Canvas>
+              <SpatiusAvatar ref={avatarRef} onStatus={handleAvatarStatus} />
             ) : (
-              <VoiceOrb
-                ttsAnalyserRef={analyserRef}
+              <VoiceWave
                 micAnalyserRef={micAnalyserRef}
-                isSpeaking={isAvatarSpeaking}
-                isListening={isListening}
+                ttsAnalyserRef={ttsAnalyserRef}
+                mode={waveMode}
               />
             )}
           </div>
@@ -571,19 +384,6 @@ export default function App() {
           {micError && (
             <div className="mic-error">{micError}</div>
           )}
-
-          <div className="av-waveform">
-            {[...Array(9)].map((_, i) => (
-              <div
-                key={i}
-                className={`av-bar ${isListening ? 'av-bar--active' : ''}`}
-                style={isListening ? {
-                  animationDelay: `${i * 55}ms`,
-                  animationDuration: `${460 + (i % 4) * 105}ms`
-                } : {}}
-              />
-            ))}
-          </div>
 
           <div className="av-controls">
             <button
