@@ -3,7 +3,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "routes": [
-    { "src": "/api/speech-token", "dest": "/api/speech-token.js" },
+    { "src": "/api/speech-token",  "dest": "/api/speech-token.js" },
+    { "src": "/api/spatius-config", "dest": "/api/spatius-config.js" },
+    { "src": "/api/spatius-token",  "dest": "/api/spatius-token.js" },
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
