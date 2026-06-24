@@ -139,7 +139,7 @@ const SpatiusAvatar = forwardRef(function SpatiusAvatar({ muted = false, onStatu
       configRef.current = config;
       if (config.configured) {
         setOverlay({
-          visible: true, mode: "start", title: "Meet Don",
+          visible: true, mode: "start", title: "Meet Amanda",
           text: "Tap to load the real-time 3D avatar. The first load downloads the avatar model.",
           progress: null, button: "Start avatar"
         });

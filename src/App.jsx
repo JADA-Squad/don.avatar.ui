@@ -167,7 +167,7 @@ export default function App() {
     src.start();
   }
 
-  // Speak Don's reply: route to the live avatar (Avatar view, lip-synced) or
+  // Speak Amanda's reply: route to the live avatar (Avatar view, lip-synced) or
   // through Web Audio so the waveform reacts (Voice view / avatar not ready).
   async function speak(text) {
     const clean = (text || '').trim();
@@ -391,7 +391,7 @@ export default function App() {
               onClick={toggleListening}
             >
               <MicIcon />
-              <span>{isListening ? 'Tap to stop' : 'Talk to Don'}</span>
+              <span>{isListening ? 'Tap to stop' : 'Talk to Amanda'}</span>
             </button>
             <button className="btn-round" onClick={stopAvatar} title="Stop speaking">
               <StopIcon />
@@ -405,9 +405,9 @@ export default function App() {
         {/* RIGHT: CHAT PANEL */}
         <main className="chat-panel">
           <header className="chat-header">
-            <div className="chat-header__av">D</div>
+            <div className="chat-header__av">A</div>
             <div className="chat-header__info">
-              <span className="chat-header__name">Don</span>
+              <span className="chat-header__name">Amanda</span>
               <span className="chat-header__sub">
                 <span className="online-dot" />
                 Campaign Intelligence Agent
@@ -421,7 +421,7 @@ export default function App() {
               const isUser = msg.sender === 'user';
               return (
                 <div key={idx} className={`msg-row ${isUser ? 'msg-row--user' : 'msg-row--bot'}`}>
-                  {!isUser && <div className="msg-av">D</div>}
+                  {!isUser && <div className="msg-av">A</div>}
                   <div className={`msg-bubble ${isUser ? 'msg-bubble--user' : 'msg-bubble--bot'}`}>
                     {isUser ? msg.text : <ReactMarkdown>{msg.text}</ReactMarkdown>}
                   </div>
@@ -430,7 +430,7 @@ export default function App() {
             })}
             {isLoading && (
               <div className="msg-row msg-row--bot">
-                <div className="msg-av">D</div>
+                <div className="msg-av">A</div>
                 <div className="msg-bubble msg-bubble--bot msg-bubble--typing">
                   <span className="typing-dot" style={{ animationDelay: '0ms' }} />
                   <span className="typing-dot" style={{ animationDelay: '160ms' }} />
