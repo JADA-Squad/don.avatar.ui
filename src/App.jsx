@@ -410,7 +410,7 @@ export default function App() {
               <span className="chat-header__name">Don</span>
               <span className="chat-header__sub">
                 <span className="online-dot" />
-                AI Analytics Assistant
+                Campaign Intelligence Agent
               </span>
             </div>
             <button className="btn-chat-clear" onClick={clearChat}>Clear chat</button>
